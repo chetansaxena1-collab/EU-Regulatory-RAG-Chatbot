@@ -6,11 +6,16 @@ print("EU Regulatory Chatbot Ready")
 print("Type exit to quit")
 
 while True:
+
     question = input("\nYou: ")
 
     if question.lower() == "exit":
         break
 
-    answer = rag.query(question)
+    result = rag.query(question)
 
-    print("\nBot:", answer)
+    print("\nBot:")
+    print(result["answer"])
+
+    print("\nSources:")
+    print(result["sources"])

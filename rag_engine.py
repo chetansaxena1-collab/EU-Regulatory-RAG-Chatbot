@@ -1,69 +1,58 @@
+import os
+import shutil
+
+from dotenv import load_dotenv
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.chains import RetrievalQA
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    Docx2txtLoader,
-    TextLoader
-)
 
 from langchain_ollama import OllamaEmbeddings, ChatOllama
-from dotenv import load_dotenv
-import os
+
+from langchain.chains import RetrievalQA
 
 load_dotenv()
 
 
 class RAGEngine:
+
     def __init__(self):
 
-        # Set up the embedding model (converts text to vectors)
+        # Embedding model
         self.embeddings = OllamaEmbeddings(
             base_url=os.getenv("OLLAMA_BASE_URL"),
             model=os.getenv("EMBEDDING_MODEL")
         )
 
-        # Set up the LLM (answers questions)
+        # LLM
         self.llm = ChatOllama(
             base_url=os.getenv("OLLAMA_BASE_URL"),
-            model=os.getenv("LLM_MODEL"),
-            temperature=0
+            model=os.getenv("LLM_MODEL")
         )
 
-        # Set up the text splitter
-        self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=int(os.getenv("CHUNK_SIZE", 1000)),
-            chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 200))
-        )
-
-        # Set up the vector database
+        # Vector database
         self.db = Chroma(
             persist_directory=os.getenv("CHROMA_DB_PATH"),
             embedding_function=self.embeddings
         )
 
-    def ingest_document(self, path, filename):
+    def ingest_document(self, file_path, filename):
 
-        # Pick the right loader based on file extension
-        ext = filename.rsplit(".", 1)[-1].lower()
+        print(f"\nLoading: {filename}")
 
-        loaders = {
-            "pdf": PyPDFLoader,
-            "docx": Docx2txtLoader,
-            "txt": TextLoader
-        }
+        loader = PyPDFLoader(file_path)
+        documents = loader.load()
 
-        loader = loaders.get(ext, TextLoader)(path)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=int(os.getenv("CHUNK_SIZE", 1000)),
+            chunk_overlap=int(os.getenv("CHUNK_OVERLAP", 200))
+        )
 
-        # Load and split the document
-        docs = loader.load()
-        chunks = self.splitter.split_documents(docs)
+        chunks = splitter.split_documents(documents)
 
-        # Tag each chunk with the source filename
         for chunk in chunks:
             chunk.metadata["source"] = filename
 
-        # Store the chunks in the vector database
         self.db.add_documents(chunks)
 
         return {
@@ -72,36 +61,43 @@ class RAGEngine:
         }
 
     def query(self, question):
-print("Searching documents...")
-        # Find the most relevant chunks
+
+        print("Searching documents...")
+
         retriever = self.db.as_retriever(
             search_kwargs={
                 "k": int(os.getenv("TOP_K_RESULTS", 3))
             }
         )
-print("Creating QA chain...")
-        # Build the question-answering chain
+
+        print("Creating QA chain...")
+
         qa = RetrievalQA.from_chain_type(
             llm=self.llm,
             retriever=retriever,
             return_source_documents=True
         )
 
-        # Get the answer
-        result = qa.invoke({"query": question})
+        print("Generating answer...")
 
-        sources = list({
-            d.metadata.get("source", "")
-            for d in result["source_documents"]
-        })
+        result = qa.invoke(
+            {"query": question}
+        )
+
+        sources = []
+
+        for doc in result["source_documents"]:
+            src = doc.metadata.get("source", "Unknown")
+
+            if src not in sources:
+                sources.append(src)
 
         return {
-            "response": result["result"],
+            "answer": result["result"],
             "sources": sources
         }
 
     def reset(self):
-        import shutil
 
         db_path = os.getenv("CHROMA_DB_PATH")
 
@@ -111,5 +107,5 @@ print("Creating QA chain...")
         self.__init__()
 
         return {
-            "status": "cleared"
+            "status": "Database cleared"
         }
